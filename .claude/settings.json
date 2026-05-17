@@ -1,0 +1,59 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(rm -rf /:*)",
+      "Bash(rm -rf /*)",
+      "Bash(rm -fr /:*)",
+      "Bash(rm -fr /*)",
+      "Bash(rm -rf ~:*)",
+      "Bash(rm -rf $HOME:*)",
+      "Bash(sudo rm:*)",
+      "Bash(sudo rmdir:*)",
+      "Bash(dd if=*of=/dev/*)",
+      "Bash(mkfs:*)",
+      "Bash(mkfs.*:*)",
+      "Bash(chmod -R 000 /:*)"
+    ],
+    "ask": [
+      "Bash(rm:*)",
+      "Bash(rm -r:*)",
+      "Bash(rm -rf:*)",
+      "Bash(rm -f:*)",
+      "Bash(rm -fr:*)",
+      "Bash(rmdir:*)",
+      "Bash(unlink:*)",
+      "Bash(trash:*)",
+      "Bash(find * -delete:*)",
+      "Bash(find * -exec rm:*)",
+      "Bash(claude /model:*)",
+      "Bash(/model:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/claude-optimizer/hooks/cache_bust_warner.py"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/claude-optimizer/hooks/prefix_monitor.py"
+          },
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_PROJECT_DIR/claude-optimizer/hooks/compact_advisor.py"
+          }
+        ]
+      }
+    ]
+  }
+}

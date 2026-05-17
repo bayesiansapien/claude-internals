@@ -1,0 +1,54 @@
+# Working drafts and planning notes (kept local)
+**/blog/
+**/*-draft.md
+**/*-draft.html
+
+# Archives and exports (kept local)
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.tar.bz2
+*.7z
+*.rar
+session-export/
+**/session-export/
+exports/
+**/exports/
+
+# Local Claude Code session state (user-specific runtime data)
+.claude/projects/
+.claude/cache.json
+.claude/cache-bust-events.json
+.claude/model-window-cache.json
+.claude/history.jsonl
+.claude/mcp-needs-auth-cache.json
+.claude/stats-cache.json
+.claude/sessions/
+.claude/backups/
+.claude/file-history/
+.claude/shell-snapshots/
+.claude/paste-cache/
+.claude/cache/
+.claude/downloads/
+.claude/tasks/
+.claude/plans/
+.claude/session-env/
+
+# Environment / secrets
+.env
+.env.local
+
+# Editor / OS / build artifacts
+.DS_Store
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.idea/
+.vscode/
+*.swp
+*.swo
+node_modules/
+package-lock.json

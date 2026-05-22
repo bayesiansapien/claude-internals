@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lib.cache_bust_state import latest_confirmed_bust, update_latest_bust
 from lib.anatomy import get_context_window, get_model_rates
+from lib.hook_payload import read_hook_payload, resolve_session
 
 
 def _auto_detect_busts(session_path_str, all_usages, last_model):
@@ -113,16 +114,11 @@ def _auto_detect_busts(session_path_str, all_usages, last_model):
         prev_model = model or prev_model
 
 
-def main():
+def main(payload=None):
     cwd = os.getcwd()
-    project_dir = Path.home() / ".claude" / "projects" / cwd.replace("/", "-")
-    if not project_dir.exists():
+    _, session_path = resolve_session(payload=payload, cwd=cwd)
+    if not session_path:
         return
-    jsonls = sorted(project_dir.glob("*.jsonl"),
-                    key=lambda p: p.stat().st_mtime, reverse=True)
-    if not jsonls:
-        return
-    session_path = jsonls[0]
 
     last_usage = None
     last_model = None
@@ -286,4 +282,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    payload = read_hook_payload()
+    main(payload=payload)

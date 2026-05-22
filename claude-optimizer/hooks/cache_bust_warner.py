@@ -27,20 +27,17 @@ from lib.anatomy import get_model_rates
 
 # ---- Current prefix sizing ----
 
-def get_current_prefix():
-    """Return (prefix_tokens, model) from latest session jsonl."""
+def get_current_prefix(payload=None):
+    """Return (prefix_tokens, model) from the session this hook fired for."""
+    from lib.hook_payload import resolve_session
     cwd = os.getcwd()
-    project_dir = Path.home() / ".claude" / "projects" / cwd.replace("/", "-")
-    if not project_dir.exists():
-        return None, None
-    jsonls = sorted(project_dir.glob("*.jsonl"),
-                    key=lambda p: p.stat().st_mtime, reverse=True)
-    if not jsonls:
+    _, session_path = resolve_session(payload=payload, cwd=cwd)
+    if not session_path:
         return None, None
     last_usage = None
     last_model = None
     try:
-        with open(jsonls[0]) as f:
+        with open(session_path) as f:
             for line in f:
                 try:
                     d = json.loads(line)
@@ -231,7 +228,7 @@ def main():
     if not action_type:
         return  # not a cache-busting action
 
-    prefix, model = get_current_prefix()
+    prefix, model = get_current_prefix(payload=payload)
     penalty = estimate_penalty(prefix, model) if prefix else 0.0
 
     rec = timing_recommendation(action_type)

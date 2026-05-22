@@ -28,32 +28,5 @@
       "Bash(claude /model:*)",
       "Bash(/model:*)"
     ]
-  },
-  "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash|Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/claude-optimizer/hooks/cache_bust_warner.py"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/claude-optimizer/hooks/prefix_monitor.py"
-          },
-          {
-            "type": "command",
-            "command": "python3 $CLAUDE_PROJECT_DIR/claude-optimizer/hooks/compact_advisor.py"
-          }
-        ]
-      }
-    ]
   }
 }

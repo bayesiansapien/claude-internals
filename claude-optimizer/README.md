@@ -459,6 +459,7 @@ VERDICT: ◐ MIXED — 1 GO vs 1 WAIT — your call based on signals above
   ═══════════════════════════════════════════════════════════
 
   Project:           mine-cc
+  Session name:      cc-internals
   Session UUID:      fd9d6977-9b33-4a4b-ad5e-8c94fb4e7720
 
   TOKEN USAGE  (budget = cache writes + output + fresh input)
@@ -490,7 +491,10 @@ VERDICT: ◐ MIXED — 1 GO vs 1 WAIT — your call based on signals above
 
   IF SPLIT NOW
   ────────────────────────────────────────────────────
-  Suggested name:    mine-cc/verification-continued
+  Default name:      cc-internals-2
+  Task-based options:
+    1. cc-internals-verification
+    2. cc-internals-next-verification
 ```
 
 **Cost:** Free (purely read-only).
@@ -627,21 +631,26 @@ and history per session.
 
 ### `session_budget_init.py` — SessionStart event
 
-**Fires once** when Claude Code starts a session. Two jobs:
+**Fires once** when Claude Code starts a session. Three jobs:
 
-1. **Initialize per-session budget state.** Reads the default from `CC_SESSION_TOKEN_LIMIT` env var (or falls back to 3M). Writes it to `~/.claude/session-budget-state.json` keyed by session UUID.
-2. **Surface continuation context if present.** If a recent handoff intent file exists in this project's handoffs directory, print a banner with its path so the assistant knows it can `Read` it for prior context.
+1. **Resolve the session name.** Reads (in order): `CC_SESSION_TITLE` env var → `pending-name.txt` in the project's handoffs dir → auto-enumerated default based on prior session names in the same project. Stored as `session_name` in `~/.claude/session-budget-state.json`.
+2. **Initialize per-session budget state.** Reads the default from `CC_SESSION_TOKEN_LIMIT` env var (or falls back to 3M). Writes it to `~/.claude/session-budget-state.json` keyed by session UUID.
+3. **Surface continuation context if present.** If a recent handoff intent file exists in this project's handoffs directory, print a banner with its path so the assistant knows it can `Read` it for prior context.
 
 **Sample banner on a fresh session:**
 
 ```
+📛 SESSION NAME: cc-internals-2
 📋 SESSION BUDGET: 3.0M tokens (budget-relevant: cache writes + output + fresh input)
    Override with: /budget <N>M  (e.g. /budget 5M)
 ```
 
+The `📛 SESSION NAME` line only appears for sessions that have a name resolved. A brand-new project's first session inherits the project directory name (e.g. `mine-cc`); subsequent sessions auto-enumerate.
+
 **Sample banner on a continued session (handoff file detected):**
 
 ```
+📛 SESSION NAME: cc-internals-2
 📋 SESSION BUDGET: 3.0M tokens ...
 
 📦 CONTINUATION DETECTED
@@ -695,16 +704,28 @@ and history per session.
       Next:       verification (predicted)
 
    📦 HANDOFF READY
-      Suggested name:  mine-cc/verification-continued
+      Current session: cc-internals
+
+   📛 NEW SESSION NAME
+      Default (enumerated): cc-internals-2
+      Task-based suggestions:
+        1. cc-internals-verification
+        2. cc-internals-fix-cross-platform
+        3. cc-internals-next-verification
+
       Intent file:     ~/.claude/projects/<hash>/session-handoffs/intent-<ts>-from-<uuid>.md
 
-   Auto-launch new session in a fresh terminal? Run:
+   To launch with the enumerated default, just say 'launch'.
+   To launch with a suggestion, say 'launch with #2' (or whichever).
+   To launch with a custom name, say 'launch as <name>'.
+
+   Manual command (default name):
       python3 ~/.claude/claude-optimizer/scripts/session_launcher.py \
           --intent <path-above> \
-          --name 'mine-cc/verification-continued'
-
-   Or say 'launch new session' to me and I will run it for you.
+          --name 'cc-internals-2'
 ```
+
+**Naming convention:** each session carries a human-readable name (e.g. `cc-internals`) stored alongside its UUID. New sessions auto-enumerate from the current name's base — `cc-internals` → `cc-internals-2` → `cc-internals-3`. You can override with any of the task-based suggestions the advisor surfaces, or with a custom name. The first session in a project defaults to the project's directory name.
 
 **Anti-spam:** the advisor honors a 10-minute cooldown between repeat fires of the same level. Once you decline a launch, it goes silent for the rest of the session.
 
@@ -723,9 +744,16 @@ Not a hook; an executable invoked by the user (or the assistant on confirmation)
 ```bash
 python3 ~/.claude/claude-optimizer/scripts/session_launcher.py \
     --intent ~/.claude/projects/<hash>/session-handoffs/intent-<ts>-from-<uuid>.md \
-    --name 'mine-cc/verification-continued' \
+    --name 'cc-internals-2' \
     --theme 'Clear Dark'   # optional
 ```
+
+**Name plumbing:** the `--name` flag does three things:
+1. Exports `CC_SESSION_TITLE=<name>` into the launched session's shell
+2. Writes the name to `pending-name.txt` inside the project's `session-handoffs/` dir (single-use, consumed by the new session's `SessionStart` hook)
+3. Surfaces it on the new session's first banner (`📛 SESSION NAME: cc-internals-2`)
+
+The `pending-name.txt` file is the durable channel — env vars sometimes don't survive the cross-terminal `osascript` boundary, but the file always does. The new session's hook reads whichever signal arrives first.
 
 **Terminal dispatch (macOS only on this branch):**
 
@@ -757,6 +785,7 @@ Optional knobs the toolkit honors:
 | `CC_SESSION_COMPACTION_LIMIT` | `5` | Compaction count at which the quality warning fires regardless of tokens |
 | `CC_LAUNCHER_THEME` | unset | Terminal profile/theme for auto-launched sessions (e.g. `"Clear Dark"`) |
 | `CC_INTENT_FILE` | unset | Explicit pointer to a handoff intent file; SessionStart hook reads this with priority over auto-discovery |
+| `CC_SESSION_TITLE` | unset | Human-readable name for the launched session (set by `session_launcher.py --name`). Read by `init_session()` to populate the new session's `session_name` field |
 | `ANTHROPIC_API_KEY` | unset | Enables T3 Sonnet judge in compact advisor |
 | `CC_SESSION_ID` | unset (CC may set) | When set, hooks use this to identify the session instead of stdin payload |
 

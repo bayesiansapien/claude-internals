@@ -226,38 +226,30 @@ def main():
         _print_manual_command(command)
         sys.exit(1)
 
-    term = _terminal_program()
-    print(f"Detected terminal: {term or '(unknown)'}", file=sys.stderr)
+    # Cross-platform launch via the platform_compat abstraction.
+    # Handles macOS (iTerm/Apple Terminal), Linux (gnome-terminal, kitty,
+    # konsole, xterm), and Windows (Windows Terminal, cmd).
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from lib.platform_compat import launch_in_new_terminal, _detect_terminal
+
+    detected = _detect_terminal()
+    print(f"Platform:          {sys.platform}", file=sys.stderr)
+    print(f"Detected terminal: {detected}", file=sys.stderr)
     print(f"New session name:  {args.name or '(none)'}", file=sys.stderr)
     print(f"Working dir:       {cwd}", file=sys.stderr)
     print(f"Intent file:       {intent_path or '(none)'}", file=sys.stderr)
     print(f"Theme:             {theme or '(terminal default)'}", file=sys.stderr)
 
-    if sys.platform != "darwin":
-        # Not macOS — print manual command for now
-        _print_manual_command(command)
-        return
+    result = launch_in_new_terminal(command, theme=theme)
 
-    if "iTerm" in term:
-        ok, err = _launch_iterm(command, theme=theme)
-        if ok:
-            print("✓ New iTerm window opened. Switch to it to continue.")
-        else:
-            print(f"⚠ iTerm launch failed: {err}", file=sys.stderr)
-            _print_manual_command(command)
-    elif "Apple_Terminal" in term or "Terminal" in term:
-        ok, err = _launch_apple_terminal(command, theme=theme)
-        if ok:
-            print("✓ New Terminal window opened. Switch to it to continue.")
-            if err and err.strip():
-                # AppleScript may print a non-fatal warning if the theme name
-                # doesn't match any profile; surface it but don't fail.
-                print(f"   (note: {err.strip()})", file=sys.stderr)
-        else:
-            print(f"⚠ Terminal launch failed: {err}", file=sys.stderr)
-            _print_manual_command(command)
+    if result.ok:
+        print(f"✓ New window opened via {result.mechanism}. Switch to it to continue.")
+        if result.error and result.error.strip():
+            # Non-fatal warnings (e.g. theme name didn't match a profile)
+            print(f"   (note: {result.error.strip()})", file=sys.stderr)
     else:
-        # macOS but unknown terminal (Warp, Alacritty, Cursor terminal, etc.)
+        print(f"⚠ Auto-launch failed ({result.mechanism}): {result.error}",
+              file=sys.stderr)
         _print_manual_command(command)
 
 

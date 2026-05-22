@@ -149,16 +149,18 @@ def get_context_window(model: str) -> int:
 # ---- OAuth ----
 
 def get_oauth_token():
-    """Pull claude.ai OAuth token from macOS keychain. Returns None on any failure."""
+    """Pull claude.ai OAuth token from the system credential store.
+
+    Cross-platform: works on macOS (Keychain), Linux (Secret Service via
+    libsecret), and Windows (Credential Manager). Returns None on any
+    failure.
+    """
+    from .platform_compat import read_oauth_token
     try:
-        blob = subprocess.run(
-            ["security", "find-generic-password", "-s",
-             "Claude Code-credentials", "-w"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if blob.returncode != 0:
+        raw = read_oauth_token()
+        if not raw:
             return None
-        return json.loads(blob.stdout).get("claudeAiOauth", {}).get("accessToken")
+        return json.loads(raw).get("claudeAiOauth", {}).get("accessToken")
     except Exception:
         return None
 

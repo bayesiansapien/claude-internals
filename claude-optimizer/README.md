@@ -44,12 +44,24 @@ tar -xzf claude-optimizer.tar.gz
 | Required | What for |
 |---|---|
 | Python 3.9+ | Every script is Python; stdlib only — no pip install |
-| macOS `security` binary | `/mcp-audit` and `/cache-bust-advisor` (reads OAuth from Keychain) |
+| OS credential store | `/mcp-audit` and `/cache-bust-advisor` read your Claude OAuth token from it |
+
+**Cross-platform support:**
+
+The toolkit runs on macOS, Linux, and Windows. The two OS-specific concerns are handled by `lib/platform_compat.py`, which tries each platform's native mechanism and falls back gracefully:
+
+| Concern | macOS | Linux | Windows |
+|---|---|---|---|
+| OAuth token read | `security` (Keychain) | `secret-tool` (libsecret) or `keyring` lib | PowerShell `Get-StoredCredential` or `keyring` lib |
+| Terminal auto-launch (session-launcher) | iTerm2 or Apple Terminal via `osascript` | gnome-terminal, kitty, konsole, or xterm | Windows Terminal (`wt.exe`) or `cmd` |
+
+If any of the above isn't available, the affected feature degrades to "print the command for the user to paste." The core hooks (`prefix_monitor`, `compact_advisor`, `session_boundary_advisor`) and the read-only slash commands (`/cost-snapshot`, `/compact-suggest`, `/session-status`, `/memory-hygiene`) don't need any of this — they work on any OS out of the box.
 
 **Optional:**
 
 | Optional | Unlocks |
 |---|---|
+| `pip install keyring` | Most reliable OAuth-token retrieval across all 3 OSes (otherwise toolkit falls back to native commands) |
 | `ANTHROPIC_API_KEY` env var | T3 Sonnet judge in compact advisor |
 | `claude.ai` OAuth (auto-present if logged in) | Exact MCP token counts, exact anatomy via Anthropic's `count_tokens` |
 

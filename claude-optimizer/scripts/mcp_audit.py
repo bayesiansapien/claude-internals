@@ -39,15 +39,17 @@ AUTH_TOOLS = {"authenticate", "complete_authentication", "auth", "login"}
 
 
 def get_oauth_token():
+    """Pull OAuth token + scopes from the system credential store.
+
+    Cross-platform: works on macOS (Keychain), Linux (Secret Service), and
+    Windows (Credential Manager) via the platform_compat abstraction.
+    """
+    from lib.platform_compat import read_oauth_token
     try:
-        blob = subprocess.run(
-            ["security", "find-generic-password", "-s",
-             "Claude Code-credentials", "-w"],
-            capture_output=True, text=True, timeout=5,
-        )
-        if blob.returncode != 0:
+        raw = read_oauth_token()
+        if not raw:
             return None, []
-        data = json.loads(blob.stdout)
+        data = json.loads(raw)
         oauth = data.get("claudeAiOauth", {})
         return oauth.get("accessToken"), oauth.get("scopes", [])
     except Exception:

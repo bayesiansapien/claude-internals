@@ -27,17 +27,91 @@ possible.
 
 ---
 
-## Quick install
+## Install
+
+You can install the toolkit at the **user level** (every project on your machine gets it automatically) or at the **project level** (only one project gets it). User level is the recommended default.
+
+### Option A: User-level install (recommended)
+
+Makes the toolkit available in every Claude Code session on this machine, regardless of which project you open.
 
 ```bash
-# Bundle everything portable
-cd /path/to/your/project
-tar -czf claude-optimizer.tar.gz claude-optimizer/ .claude/
+# 1. Clone the repo somewhere convenient
+git clone https://github.com/bayesiansapien/claude-internals ~/claude-internals
 
-# In a new project:
-tar -xzf claude-optimizer.tar.gz
-# Restart Claude Code → hooks pick up automatically
+# 2. Copy the toolkit into your user-level Claude Code config
+mkdir -p ~/.claude/claude-optimizer
+cp -r ~/claude-internals/claude-optimizer/{hooks,scripts,lib,README.md} ~/.claude/claude-optimizer/
+
+# 3. Copy the slash commands
+mkdir -p ~/.claude/commands
+cp ~/claude-internals/.claude/commands/*.md ~/.claude/commands/
+
+# 4. Merge the hooks block into your ~/.claude/settings.json
+#    (open the file and add the "hooks" block from the snippet below)
 ```
+
+Then quit Claude Code (Cmd+Q on macOS) and reopen it in any project. The hooks fire from turn 1.
+
+**Hooks block to merge into `~/.claude/settings.json`:**
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {"hooks": [{"type": "command", "command": "python3 $HOME/.claude/claude-optimizer/hooks/session_budget_init.py"}]}
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write",
+        "hooks": [{"type": "command", "command": "python3 $HOME/.claude/claude-optimizer/hooks/cache_bust_warner.py"}]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {"type": "command", "command": "python3 $HOME/.claude/claude-optimizer/hooks/prefix_monitor.py"},
+          {"type": "command", "command": "python3 $HOME/.claude/claude-optimizer/hooks/compact_advisor.py"},
+          {"type": "command", "command": "python3 $HOME/.claude/claude-optimizer/hooks/session_boundary_advisor.py"}
+        ]
+      }
+    ]
+  }
+}
+```
+
+If you already have a `hooks` key in your settings.json, merge the arrays manually. Other top-level keys (`env`, `permissions`, `theme`, etc.) stay untouched.
+
+### Option B: Project-level install
+
+Use this if you only want the toolkit active in ONE project. The toolkit code lives inside the project, and slash commands use relative paths so the install is self-contained.
+
+```bash
+# Inside your project directory
+git clone https://github.com/bayesiansapien/claude-internals tmp-clone
+cp -r tmp-clone/claude-optimizer ./claude-optimizer
+cp -r tmp-clone/.claude ./.claude
+rm -rf tmp-clone
+```
+
+The project-level `.claude/settings.json` already contains the permission rules. To enable hooks at the project level, you'd add the same hooks block as Option A but with paths like `$CLAUDE_PROJECT_DIR/claude-optimizer/hooks/...`.
+
+### Verifying the install
+
+In any new Claude Code session, the SessionStart banner should appear:
+
+```
+📋 SESSION BUDGET: 3.0M tokens (budget-relevant: cache writes + output + fresh input)
+   Override with: /budget <N>M  (e.g. /budget 5M)
+```
+
+If you don't see that banner, hooks aren't wired up correctly. Run:
+
+```bash
+python3 ~/.claude/claude-optimizer/lib/platform_compat.py
+```
+
+It should print platform + terminal detection + OAuth token status. If anything fails there, the README's "Troubleshooting" section at the bottom covers common issues.
 
 **Dependencies:**
 
@@ -345,6 +419,90 @@ VERDICT: ◐ MIXED — 1 GO vs 1 WAIT — your call based on signals above
 
 ---
 
+### `/budget [<value>]` — Per-session token budget
+
+**Use when** you want to set or check the configured token budget that the `session_boundary_advisor` hook uses to decide when to recommend a session split.
+
+**Usage:**
+
+```
+/budget          → show current budget + usage
+/budget 5M       → set budget to 5,000,000 tokens (override default)
+/budget 2.5M     → fractional values OK
+/budget 3000000  → exact integer also OK
+/budget reset    → revert to default (3M or `CC_SESSION_TOKEN_LIMIT` env var)
+```
+
+**Sample output (no args, just `/budget`):**
+
+```
+  SESSION BUDGET · fd9d6977…
+  ─────────────────────────────────────────────────────
+  Budget:        3.00M tokens
+  Used so far:   1.42M (47.3%)
+  Remaining:     1.58M
+  Compactions:   0
+  Last phase:    implementation
+
+  Override:      /budget 5M    (or any value with K/M suffix)
+  Reset:         /budget reset
+```
+
+**The budget metric is "fresh work tokens":** cache writes + output + uncached input. Cache reads (re-sends of cached prefix) are excluded because they're deterministic re-reads, not new model work. 3M on this metric tracks roughly 4 hours of typical Opus coding.
+
+**Cost:** Free.
+
+---
+
+### `/session-status` — On-demand session inspection
+
+**Use when** you want a complete read-only view of this session's state: token usage, budget, phase, compactions, advisor activity, and what the next session name would be if you split now. Does NOT trigger any banners or recommendations.
+
+**Sample output:**
+
+```
+  SESSION STATUS · fd9d6977…
+  ═══════════════════════════════════════════════════════════
+
+  Project:           mine-cc
+  Session UUID:      fd9d6977-9b33-4a4b-ad5e-8c94fb4e7720
+
+  TOKEN USAGE  (budget = cache writes + output + fresh input)
+  ────────────────────────────────────────────────────
+  Used / budget:     1.42M / 3.00M (47.3%)
+  Cache reads:       485.23M  (informational)
+  Output:            312.18K
+  Fresh input:       1.10M
+
+  PHASE DETECTION  (last 20 turns)
+  ────────────────────────────────────────────────────
+  Current phase:     implementation  (confidence 14)
+  Predicted next:    verification
+  Tool distribution:
+    implementation     14
+    research            5
+    planning            1
+
+  COMPACTIONS
+  ────────────────────────────────────────────────────
+  This session:      0
+  Quality risk:      ✓ low
+
+  ADVISOR STATE
+  ────────────────────────────────────────────────────
+  Recommendations fired: 0
+  Last fire:             —
+  User declined launch:  False
+
+  IF SPLIT NOW
+  ────────────────────────────────────────────────────
+  Suggested name:    mine-cc/verification-continued
+```
+
+**Cost:** Free (purely read-only).
+
+---
+
 ## Hooks (auto-firing)
 
 Hooks are registered in `.claude/settings.json`. They run automatically on
@@ -470,6 +628,153 @@ but renders the verdict as a one-line banner only when actionable.
 
 State file: `~/.claude/compact-advisor-state.json` tracks anti-spam state
 and history per session.
+
+---
+
+### `session_budget_init.py` — SessionStart event
+
+**Fires once** when Claude Code starts a session. Two jobs:
+
+1. **Initialize per-session budget state.** Reads the default from `CC_SESSION_TOKEN_LIMIT` env var (or falls back to 3M). Writes it to `~/.claude/session-budget-state.json` keyed by session UUID.
+2. **Surface continuation context if present.** If a recent handoff intent file exists in this project's handoffs directory, print a banner with its path so the assistant knows it can `Read` it for prior context.
+
+**Sample banner on a fresh session:**
+
+```
+📋 SESSION BUDGET: 3.0M tokens (budget-relevant: cache writes + output + fresh input)
+   Override with: /budget <N>M  (e.g. /budget 5M)
+```
+
+**Sample banner on a continued session (handoff file detected):**
+
+```
+📋 SESSION BUDGET: 3.0M tokens ...
+
+📦 CONTINUATION DETECTED
+   This session inherits from a prior Claude Code session.
+   Handoff file: ~/.claude/projects/<hash>/session-handoffs/intent-<ts>-from-<short>.md
+
+   To bring the prior context in, use the Read tool on the path above. The
+   handoff contains: prior session metadata, phase context, last 5 user
+   messages verbatim, files in flight at the time of split.
+
+   Auto-memory is already loaded (Tier 1 facts carry over).
+   Read the handoff only if you need extra reorientation.
+```
+
+**Cost:** Free. Runs once per session.
+
+---
+
+### `session_boundary_advisor.py` — Stop event
+
+**Fires at the end of every turn** but stays silent unless conditions warrant a recommendation. Combines four signals:
+
+| Signal | What it measures |
+|---|---|
+| Token usage | Cumulative budget-relevant tokens (cache writes + output + fresh input) |
+| Boundary state | Whether the current turn looks like a clean break (no in-progress tool errors, no rapid implementation activity, no in-progress task) |
+| Compaction count | How many LLM-based partial/auto compactions have fired this session |
+| Phase | Detected via `phase_detector` (research / planning / implementation / verification / wrap_up / mixed / unknown) |
+
+**Decision matrix:**
+
+| Tokens used | Boundary | Compactions | Banner |
+|---|---|---|---|
+| < 70% of budget | any | < 3 | silent |
+| 70–90% | clean | any | "approaching budget" |
+| ≥ 90% | clean | any | **"split recommended"** + auto-launch offer |
+| ≥ 90% | active (mid-task) | any | "approaching budget" (defer split to next clean break) |
+| any | any | ≥ 5 | "quality risk: lossiness cascade" |
+
+**Sample banner at threshold + clean boundary:**
+
+```
+🚨 SESSION BOUNDARY ADVISOR · split recommended
+
+   Tokens used:   2.9M / 3.0M (95%)
+   Compactions:   1
+   Boundary:      clean (good moment to split)
+
+   📍 PHASE DETECTION
+      Current:    implementation (confidence 14)
+      Next:       verification (predicted)
+
+   📦 HANDOFF READY
+      Suggested name:  mine-cc/verification-continued
+      Intent file:     ~/.claude/projects/<hash>/session-handoffs/intent-<ts>-from-<uuid>.md
+
+   Auto-launch new session in a fresh terminal? Run:
+      python3 ~/.claude/claude-optimizer/scripts/session_launcher.py \
+          --intent <path-above> \
+          --name 'mine-cc/verification-continued'
+
+   Or say 'launch new session' to me and I will run it for you.
+```
+
+**Anti-spam:** the advisor honors a 10-minute cooldown between repeat fires of the same level. Once you decline a launch, it goes silent for the rest of the session.
+
+**State file:** `~/.claude/session-budget-state.json` keyed by session UUID.
+
+**Cost:** Free.
+
+---
+
+### `scripts/session_launcher.py` — Auto-launch helper
+
+Not a hook; an executable invoked by the user (or the assistant on confirmation) to spawn a new Claude Code session in a fresh terminal window with a handoff intent file pre-loaded.
+
+**Usage:**
+
+```bash
+python3 ~/.claude/claude-optimizer/scripts/session_launcher.py \
+    --intent ~/.claude/projects/<hash>/session-handoffs/intent-<ts>-from-<uuid>.md \
+    --name 'mine-cc/verification-continued' \
+    --theme 'Clear Dark'   # optional
+```
+
+**Cross-platform launch:** detects the active terminal program and dispatches to the right launcher.
+
+| OS | Terminal | Mechanism |
+|---|---|---|
+| macOS | iTerm2 | `osascript` with profile selection |
+| macOS | Apple Terminal | `osascript` with settings-set selection |
+| Linux | gnome-terminal | `gnome-terminal --profile` |
+| Linux | kitty | `kitty --override theme=` |
+| Linux | konsole | `konsole --profile` |
+| Linux | xterm | basic spawn (no theme) |
+| Windows | Windows Terminal | `wt.exe new-tab -p <profile>` |
+| Windows | cmd | `cmd /c start cmd /k <command>` |
+
+**Theme override:** pass `--theme "Clear Dark"` (or whichever profile name you have configured). Can also be set globally via env var `CC_LAUNCHER_THEME`.
+
+**The launched session is organic:** the command is simply `cd <cwd> && claude`, with two env vars exported (`CC_SESSION_TITLE`, `CC_INTENT_FILE`). No `--append-system-prompt-file`, no system-prompt injection — the new session behaves exactly like a manually-typed `claude` launch. The handoff file is a sidecar reference; the SessionStart hook surfaces its path so the assistant can `Read` it on demand.
+
+**Dry-run:** add `--dry-run` to print the command without launching.
+
+---
+
+## Environment variables
+
+Optional knobs the toolkit honors:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `CC_SESSION_TOKEN_LIMIT` | `3000000` | Default token budget for new sessions (overridable per-session via `/budget`) |
+| `CC_SESSION_WARN_THRESHOLD` | `0.7` | Fraction of budget at which the advisor starts warning |
+| `CC_SESSION_SPLIT_THRESHOLD` | `0.9` | Fraction at which the advisor recommends a split |
+| `CC_SESSION_COMPACTION_LIMIT` | `5` | Compaction count at which the quality warning fires regardless of tokens |
+| `CC_LAUNCHER_THEME` | unset | Terminal profile/theme for auto-launched sessions (e.g. `"Clear Dark"`) |
+| `CC_INTENT_FILE` | unset | Explicit pointer to a handoff intent file; SessionStart hook reads this with priority over auto-discovery |
+| `ANTHROPIC_API_KEY` | unset | Enables T3 Sonnet judge in compact advisor |
+| `CC_SESSION_ID` | unset (CC may set) | When set, hooks use this to identify the session instead of stdin payload |
+
+Set them in your shell rc (`~/.zshrc` or `~/.bashrc`) for machine-wide defaults:
+
+```bash
+export CC_SESSION_TOKEN_LIMIT=5000000
+export CC_LAUNCHER_THEME="Clear Dark"
+```
 
 ---
 
@@ -700,10 +1005,74 @@ tar -czf claude-optimizer.tar.gz claude-optimizer/ .claude/
 
 | Component | How |
 |---|---|
-| All hooks | Comment them out in `.claude/settings.json` |
+| All hooks | Remove the `hooks` block from `~/.claude/settings.json` (or `.claude/settings.json` for project-level) |
 | Specific hook | Remove its entry from `settings.json` |
-| All slash commands | Delete files in `.claude/commands/` |
-| Permission rules | Edit `.claude/settings.json` `permissions.deny` / `permissions.ask` |
-| Entire toolkit | `rm -rf claude-optimizer/ .claude/` (or just remove from bundle) |
+| All slash commands | Delete files in `~/.claude/commands/` (or `.claude/commands/` for project-level) |
+| Permission rules | Edit `permissions.deny` / `permissions.ask` in `settings.json` |
+| Entire toolkit | `rm -rf ~/.claude/claude-optimizer/ ~/.claude/commands/{cost-snapshot,compact-suggest,cache-bust-advisor,mcp-audit,memory-hygiene,budget,session-status}.md` |
 
-Fully removable; nothing modifies system files outside the project directory.
+Fully removable; nothing modifies system files outside `~/.claude/` and the project directory.
+
+---
+
+## Troubleshooting
+
+### "No SessionStart banner appears when I launch `claude`"
+
+The hooks aren't wired into your `~/.claude/settings.json`. Verify the file has the `hooks` block shown in the "Install" section. After editing, fully quit Claude Code (Cmd+Q on macOS) and reopen — settings are loaded once at session start.
+
+### "Hooks fire but `prefix_monitor` shows the wrong session's prefix"
+
+This was a bug in earlier versions where hooks discovered the session JSONL by file mtime. If you have multiple Claude Code sessions running simultaneously in the same project, the most recently touched JSONL could belong to a different session. Fixed in v0.3+ by reading `transcript_path` from CC's stdin payload. Update to the latest toolkit version if you see this.
+
+### "`/mcp-audit` says 'no OAuth token found'"
+
+The toolkit can't read your Claude OAuth credential from the system credential store. Three causes:
+
+1. **You're not logged in to claude.ai.** Run `claude` and log in once.
+2. **No supported credential backend on your system.** Install the cross-platform `keyring` library: `pip install keyring`. The toolkit will use it across all 3 OSes.
+3. **Linux only — no Secret Service running.** Install GNOME Keyring or KWallet: `sudo apt install libsecret-tools gnome-keyring` (Debian/Ubuntu) or your distro's equivalent.
+
+The rest of the toolkit (`/cost-snapshot`, `/compact-suggest`, all hooks) doesn't need OAuth; only `/mcp-audit` and parts of `/cache-bust-advisor` do.
+
+### "`session_launcher.py` doesn't open a new terminal window"
+
+Run the platform smoke test:
+
+```bash
+python3 ~/.claude/claude-optimizer/lib/platform_compat.py
+```
+
+Check which terminal it detects and whether OAuth is found. If the detected terminal is not one the toolkit supports (Warp, Hyper, Tabby, etc.), the launcher falls back to printing the bash command; paste it into a new terminal manually.
+
+To force a specific terminal, set `$TERM_PROGRAM=iTerm.app` (or `Apple_Terminal`) before invoking the launcher.
+
+### "I see two banners for every event"
+
+You have the hooks registered at both user level (`~/.claude/settings.json`) AND project level (`<project>/.claude/settings.json`). Pick one (user level is preferred for universal coverage) and remove the hooks block from the other.
+
+### "`/budget` says 'no session detected'"
+
+The toolkit didn't find a session JSONL for your current working directory. Either:
+- Run Claude Code from this directory at least once (the JSONL is created on first turn)
+- `cd` to the project root before running the slash command
+
+### "I want different defaults for budget / theme"
+
+Set the env vars in your shell rc. See the "Environment variables" section above.
+
+---
+
+## Sharing with your team
+
+If your team uses Claude Code, you can share this toolkit by:
+
+1. Have each teammate clone the repo and run the user-level install steps.
+2. **Or** package the toolkit into your team's onboarding doc with the install commands inline.
+3. **Or** check the toolkit into a shared repo (e.g. a team monorepo) and point teammates at a setup script.
+
+The toolkit is **MIT licensed**, so internal team use, modification, or rebranding is all fine.
+
+**Cross-platform team note:** the toolkit works on macOS, Linux, and Windows. Teammates on Linux/Windows should `pip install keyring` for the most reliable OAuth-token retrieval, but everything else works on stdlib alone.
+
+**Universal toolkit, per-project settings.json:** the recommended pattern for a team is for each person to install the toolkit at user level (`~/.claude/`), and check in a project-level `<project>/.claude/settings.json` with shared permission rules. That way safety rails are project-controlled but cost visibility is opt-in per teammate.

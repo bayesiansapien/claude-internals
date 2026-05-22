@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lib.session_budget_state import (
     get_session, cumulative_session_tokens, count_compactions_in_jsonl,
+    next_enumerated_name,
 )
 from lib.hook_payload import resolve_session
 from lib.phase_detector import detect_phase, predict_next_phase, generate_session_name
@@ -44,8 +45,15 @@ def main():
     compactions = count_compactions_in_jsonl(jsonl_path) if jsonl_path else 0
     phase, conf, breakdown = detect_phase(jsonl_path) if jsonl_path else ("unknown", 0, {})
     next_phase = predict_next_phase(phase, breakdown)
-    project_name = Path(os.getcwd()).name
-    suggested_name = generate_session_name(phase, next_phase, project_name=project_name)
+    cwd = os.getcwd()
+    project_name = Path(cwd).name
+    current_session_name = state.get("session_name") or project_name
+    enumerated = next_enumerated_name(cwd)
+    name_options = generate_session_name(
+        phase, next_phase, project_name=project_name,
+        current_session_name=current_session_name,
+        enumerated_default=enumerated,
+    )
 
     budget = state.get("budget_tokens", 3_000_000)
     used = usage.get("total", 0)
@@ -55,6 +63,7 @@ def main():
     print(f"  ═══════════════════════════════════════════════════════════")
     print()
     print(f"  Project:           {project_name}")
+    print(f"  Session name:      {current_session_name}")
     print(f"  Session UUID:      {session_uuid}")
     print()
     print(f"  TOKEN USAGE  (budget = cache writes + output + fresh input)")
@@ -86,7 +95,11 @@ def main():
     print()
     print(f"  IF SPLIT NOW")
     print(f"  ────────────────────────────────────────────────────")
-    print(f"  Suggested name:    {suggested_name}")
+    print(f"  Default name:      {name_options['default']}")
+    if name_options.get('suggestions'):
+        print(f"  Task-based options:")
+        for i, s in enumerate(name_options['suggestions'], 1):
+            print(f"    {i}. {s}")
     print(f"  Use /budget to adjust the budget; the advisor will fire when")
     print(f"  conditions cross the threshold + a clean boundary is detected.")
 

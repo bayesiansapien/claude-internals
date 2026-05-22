@@ -147,30 +147,97 @@ def predict_next_phase(current_phase, breakdown, recent_phases=None):
     return NEXT_PHASE_HINTS.get(current_phase)
 
 
-def generate_session_name(current_phase, predicted_next, project_name=None, recent_user_msgs=None):
-    """Generate a short kebab-case name for a new session.
+def generate_session_name(current_phase, predicted_next, project_name=None,
+                          recent_user_msgs=None, current_session_name=None,
+                          enumerated_default=None):
+    """Return naming options for the next session.
 
-    Format: <project>/<phase>-<short-topic>
-    The short-topic is extracted from recent user messages if available.
+    Returns a dict:
+      {
+        "default":     "cc-internals-2",       # enumeration-based, always present
+        "suggestions": ["cc-internals-verification",
+                        "cc-internals-cross-platform-cleanup",
+                        "cc-internals-next-phase"],
+      }
+
+    The caller (boundary advisor) shows the default plus 2-3 phase-based
+    suggestions in the banner. If user accepts default → enumerated name wins.
+    If user picks a suggestion → that name wins.
+
+    Inputs:
+      current_phase / predicted_next : from detect_phase + predict_next_phase
+      project_name                   : last segment of cwd (fallback base)
+      recent_user_msgs               : recent user turns (used to extract topic)
+      current_session_name           : the running session's name (e.g. "cc-internals")
+                                       used to derive the base for enumeration + suggestions
+      enumerated_default             : pre-computed via session_budget_state.next_enumerated_name;
+                                       if not provided, we synthesize from current_session_name
     """
-    project = project_name or "session"
-    phase_label = predicted_next or current_phase or "next"
+    # 1. Resolve the BASE name (the part before any "-N" suffix)
+    base = current_session_name or project_name or "session"
+    # Strip any trailing -<digits> to get the canonical base
+    import re as _re
+    m = _re.match(r"^(.+?)(?:-(\d+))?$", base)
+    if m:
+        base = m.group(1)
 
-    topic = "continued"
-    if recent_user_msgs:
-        # Use first non-empty word that looks like a noun/verb from the most recent msg
-        text = " ".join(recent_user_msgs[-1:]).lower()
-        # Strip punctuation, pull first 2-3 meaningful words
-        import re
-        words = re.findall(r"[a-z]{3,15}", text)
-        SKIP = {"the", "and", "for", "with", "into", "from", "this", "that", "you", "are",
-                "let", "going", "yeah", "okay", "give", "tell", "have", "would", "should",
-                "want", "need", "make", "sure", "can", "now", "also", "like", "what", "see"}
-        meaningful = [w for w in words if w not in SKIP][:3]
-        if meaningful:
-            topic = "-".join(meaningful)
+    # 2. Resolve the enumerated default
+    if enumerated_default:
+        default_name = enumerated_default
+    elif current_session_name:
+        # If the running session ends in -N, increment; else start at -2
+        m2 = _re.match(r"^(.+?)-(\d+)$", current_session_name)
+        if m2:
+            default_name = f"{m2.group(1)}-{int(m2.group(2)) + 1}"
+        else:
+            default_name = f"{current_session_name}-2"
+    else:
+        default_name = f"{base}-2"
 
-    return f"{project}/{phase_label}-{topic}"[:60]
+    # 3. Build phase-based suggestions
+    suggestions = []
+    phase_label = predicted_next or current_phase
+    if phase_label and phase_label not in ("unknown", "mixed"):
+        suggestions.append(f"{base}-{phase_label.replace('_', '-')}")
+
+    # Topic-based suggestion from recent user messages
+    topic = _extract_topic_words(recent_user_msgs)
+    if topic:
+        suggestions.append(f"{base}-{topic}")
+
+    # Generic "next" suggestion as a 3rd option
+    if predicted_next and predicted_next not in ("unknown", "mixed"):
+        suggestions.append(f"{base}-next-{predicted_next.replace('_', '-')}")
+    elif current_phase and current_phase not in ("unknown", "mixed"):
+        suggestions.append(f"{base}-continued")
+
+    # Dedupe and trim length per suggestion
+    seen = set()
+    deduped = []
+    for s in suggestions:
+        s = s[:60]
+        if s and s != default_name and s not in seen:
+            seen.add(s)
+            deduped.append(s)
+
+    return {"default": default_name[:60], "suggestions": deduped[:3]}
+
+
+def _extract_topic_words(recent_user_msgs):
+    """Pull a 1-3 word topical phrase from recent user messages."""
+    if not recent_user_msgs:
+        return None
+    import re as _re
+    text = " ".join(recent_user_msgs[-2:]).lower()
+    words = _re.findall(r"[a-z]{3,15}", text)
+    SKIP = {"the", "and", "for", "with", "into", "from", "this", "that", "you", "are",
+            "let", "going", "yeah", "okay", "give", "tell", "have", "would", "should",
+            "want", "need", "make", "sure", "can", "now", "also", "like", "what", "see",
+            "session", "name", "fine", "good", "ok", "yes", "but", "ill", "well", "just"}
+    meaningful = [w for w in words if w not in SKIP][:3]
+    if not meaningful:
+        return None
+    return "-".join(meaningful)
 
 
 if __name__ == "__main__":
@@ -189,5 +256,11 @@ if __name__ == "__main__":
     print(f"Tool-call breakdown (last {LOOKBACK_TURNS} turns):")
     for k, v in sorted(breakdown.items(), key=lambda kv: -kv[1]):
         print(f"  {k:20s} {v}")
-    name = generate_session_name(phase, next_phase, project_name="mine-cc")
-    print(f"Suggested next-session name: {name}")
+    names = generate_session_name(
+        phase, next_phase, project_name="mine-cc",
+        current_session_name="cc-internals",
+    )
+    print(f"Enumerated default: {names['default']}")
+    print(f"Suggestions:")
+    for s in names["suggestions"]:
+        print(f"  - {s}")

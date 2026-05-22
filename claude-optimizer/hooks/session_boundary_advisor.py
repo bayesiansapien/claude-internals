@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from lib.session_budget_state import (
     get_session, cumulative_session_tokens,
     count_compactions_in_jsonl, record_recommendation_fired, can_fire_recommendation,
-    record_phase,
+    record_phase, next_enumerated_name,
 )
 from lib.hook_payload import read_hook_payload, resolve_session
 from lib.phase_detector import detect_phase, predict_next_phase, generate_session_name
@@ -53,6 +53,43 @@ def _project_name_from_cwd(cwd):
     return Path(cwd).name or "session"
 
 
+def _extract_recent_user_messages(jsonl_path, n=3):
+    """Pull the last N text-only user messages from the session JSONL.
+
+    Skips tool_result-bearing user entries (they aren't real prompts).
+    """
+    if not Path(jsonl_path).exists():
+        return []
+    msgs = []
+    try:
+        with open(jsonl_path) as f:
+            for line in f:
+                try:
+                    d = json.loads(line)
+                except Exception:
+                    continue
+                if d.get("type") != "user" or d.get("isSidechain"):
+                    continue
+                m = d.get("message", {})
+                content = m.get("content") if isinstance(m, dict) else None
+                text = None
+                if isinstance(content, str) and not d.get("toolUseResult"):
+                    text = content
+                elif isinstance(content, list):
+                    has_tool = any(isinstance(b, dict) and b.get("type") == "tool_result"
+                                   for b in content)
+                    if not has_tool:
+                        texts = [b.get("text", "") for b in content
+                                 if isinstance(b, dict) and b.get("type") == "text"]
+                        if texts:
+                            text = " ".join(texts)
+                if text and text.strip():
+                    msgs.append(text.strip())
+    except Exception:
+        return []
+    return msgs[-n:]
+
+
 def _boundary_is_clean(signals):
     """A 'clean' boundary = no in-progress work, no recent tool errors,
     no rapid implementation activity."""
@@ -66,7 +103,8 @@ def _boundary_is_clean(signals):
 
 
 def _build_banner(*, level, tokens_used, budget, ratio, compactions, phase_info,
-                   boundary_clean, suggested_name, handoff_path=None):
+                   boundary_clean, name_options, handoff_path=None,
+                   current_session_name=None):
     """Construct the banner text based on level (info / split / quality)."""
     lines = []
     if level == "info":
@@ -95,18 +133,31 @@ def _build_banner(*, level, tokens_used, budget, ratio, compactions, phase_info,
             lines.append(f"      Next:       {nxt} (predicted)")
 
     if level == "split":
+        default_name = name_options["default"]
+        suggestions = name_options.get("suggestions", [])
         lines.append("")
         lines.append("   📦 HANDOFF READY")
-        lines.append(f"      Suggested name:  {suggested_name}")
+        if current_session_name:
+            lines.append(f"      Current session: {current_session_name}")
+        lines.append("")
+        lines.append(f"   📛 NEW SESSION NAME")
+        lines.append(f"      Default (enumerated): {default_name}")
+        if suggestions:
+            lines.append(f"      Task-based suggestions:")
+            for i, s in enumerate(suggestions, 1):
+                lines.append(f"        {i}. {s}")
+        lines.append("")
         if handoff_path:
             lines.append(f"      Intent file:     {handoff_path}")
+            lines.append("")
+        lines.append("   To launch with the enumerated default, just say 'launch'.")
+        lines.append("   To launch with a suggestion, say 'launch with #2' (or whichever).")
+        lines.append("   To launch with a custom name, say 'launch as <name>'.")
         lines.append("")
-        lines.append("   Auto-launch new session in a fresh iTerm tab? Run:")
+        lines.append("   Manual command (default name):")
         lines.append(f"      python3 ~/.claude/claude-optimizer/scripts/session_launcher.py \\")
         lines.append(f"          --intent {handoff_path or '<intent-file>'} \\")
-        lines.append(f"          --name '{suggested_name}'")
-        lines.append("")
-        lines.append("   Or say 'launch new session' to me and I will run it for you.")
+        lines.append(f"          --name '{default_name}'")
     elif level == "info":
         lines.append("")
         lines.append(
@@ -172,13 +223,22 @@ def main(payload=None):
     if not can_fire_recommendation(session_uuid):
         return  # respect cooldown / user-declined
 
-    # Generate suggested name + (for split level) write handoff file
+    # Generate suggested names + (for split level) write handoff file
     project_name = _project_name_from_cwd(cwd)
-    suggested_name = generate_session_name(
+    current_session_name = state.get("session_name") or project_name
+
+    # Pull last few user messages for topic extraction
+    recent_user_msgs = _extract_recent_user_messages(jsonl_path, n=3)
+
+    enumerated = next_enumerated_name(cwd)
+    name_options = generate_session_name(
         phase, next_phase,
         project_name=project_name,
-        recent_user_msgs=None,
+        recent_user_msgs=recent_user_msgs,
+        current_session_name=current_session_name,
+        enumerated_default=enumerated,
     )
+    default_name = name_options["default"]
 
     handoff_path = None
     if level == "split":
@@ -192,7 +252,7 @@ def main(payload=None):
                     "current": phase, "next": next_phase,
                     "confidence": conf, "breakdown": breakdown,
                 },
-                new_session_name=suggested_name,
+                new_session_name=default_name,
             )
         except Exception:
             handoff_path = None
@@ -205,8 +265,9 @@ def main(payload=None):
         compactions=compactions,
         phase_info={"current": phase, "next": next_phase, "confidence": conf},
         boundary_clean=boundary_clean,
-        suggested_name=suggested_name,
+        name_options=name_options,
         handoff_path=str(handoff_path) if handoff_path else None,
+        current_session_name=current_session_name,
     )
 
     record_recommendation_fired(session_uuid)

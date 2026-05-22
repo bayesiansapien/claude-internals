@@ -215,6 +215,17 @@ def main():
         except Exception:
             pass
 
+    # Drop the chosen session name into pending-name.txt so the new session's
+    # SessionStart hook can read it (env vars don't survive across the osascript
+    # boundary reliably; the file is the durable channel).
+    if args.name:
+        handoff_dir = _project_handoff_dir(cwd)
+        handoff_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            (handoff_dir / "pending-name.txt").write_text(args.name.strip() + "\n")
+        except Exception:
+            pass
+
     command = _build_command(cwd, intent_path, args.name)
 
     if args.dry_run:

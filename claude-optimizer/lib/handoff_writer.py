@@ -260,14 +260,17 @@ if __name__ == "__main__":
     usage = cumulative_session_tokens(jsonl)
     phase, conf, breakdown = detect_phase(jsonl)
     next_phase = predict_next_phase(phase, breakdown)
-    name = generate_session_name(phase, next_phase, project_name="mine-cc")
+    name_opts = generate_session_name(
+        phase, next_phase, project_name="mine-cc",
+        current_session_name=state.get("session_name"),
+    )
     out = write_handoff(
         session_uuid=sid,
         jsonl_path=jsonl,
         session_state=state,
         token_usage=usage,
         phase_info={"current": phase, "next": next_phase, "confidence": conf, "breakdown": breakdown},
-        new_session_name=name,
+        new_session_name=name_opts["default"],
     )
     print(f"Handoff written to: {out}")
     print("=" * 60)

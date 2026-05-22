@@ -87,10 +87,13 @@ def main(payload=None):
         # initialize it lazily on the first Stop hook fire.
         return
 
-    state = init_session(session_uuid)
+    state = init_session(session_uuid, project_cwd=cwd)
     budget = state["budget_tokens"]
+    session_name = state.get("session_name")
 
     lines = []
+    if session_name:
+        lines.append(f"📛 SESSION NAME: {session_name}")
     lines.append(f"📋 SESSION BUDGET: {_format_tokens(budget)} tokens (budget-relevant: cache writes + output + fresh input)")
     lines.append(f"   Override with: /budget <N>M  (e.g. /budget 5M)")
 

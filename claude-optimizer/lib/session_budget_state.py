@@ -13,12 +13,20 @@ Schema:
       ],
       "boundary_recommendations_fired": 0,
       "last_recommendation_ts": null,
-      "user_declined_launch": false
+      "user_declined_launch": false,
+      "session_name": "cc-internals-2",
+      "project_cwd": "/Users/.../mine-cc"
     }
   }
 
 The session_uuid is the bare UUID (without .jsonl) that names the session
 transcript inside ~/.claude/projects/<project-hash>/<uuid>.jsonl.
+
+session_name is a human-readable label for the session. It defaults to the
+project's directory name (e.g. "mine-cc") for the first session, and is
+auto-enumerated for subsequent sessions in the same project (cc-internals-2,
+cc-internals-3, ...). The handoff flow lets the user override with a
+phase-based suggested name at split time.
 """
 
 import json
@@ -50,14 +58,23 @@ def _save(state):
         pass
 
 
-def init_session(session_uuid, budget_tokens=None):
-    """Initialize state for a new session. Idempotent."""
+def init_session(session_uuid, budget_tokens=None, session_name=None, project_cwd=None):
+    """Initialize state for a new session. Idempotent.
+
+    If session_name is omitted, resolution order:
+      1. CC_SESSION_TITLE env var (set by the launcher for handoff-spawned sessions)
+      2. pending-name.txt file inside the project's handoff dir
+      3. Auto-enumerated default from project's prior session names
+    """
     state = _load()
     if session_uuid in state:
         return state[session_uuid]
     budget = budget_tokens or int(
         os.environ.get("CC_SESSION_TOKEN_LIMIT", str(DEFAULT_BUDGET))
     )
+    cwd = project_cwd or os.getcwd()
+    if session_name is None:
+        session_name = _resolve_initial_session_name(cwd, state)
     state[session_uuid] = {
         "budget_tokens": budget,
         "set_at_ts": time.time(),
@@ -67,9 +84,96 @@ def init_session(session_uuid, budget_tokens=None):
         "boundary_recommendations_fired": 0,
         "last_recommendation_ts": None,
         "user_declined_launch": False,
+        "session_name": session_name,
+        "project_cwd": cwd,
     }
     _save(state)
     return state[session_uuid]
+
+
+def _resolve_initial_session_name(cwd, state):
+    """Determine the name for a fresh session.
+
+    Order:
+      1. CC_SESSION_TITLE env var (handoff-spawned)
+      2. pending-name.txt in the project's session-handoffs dir (handoff-spawned)
+      3. next_enumerated_name(cwd, state) — auto-increments based on prior names
+    """
+    env_name = os.environ.get("CC_SESSION_TITLE")
+    if env_name:
+        return env_name.strip()
+
+    pending = Path(cwd).expanduser() if False else None
+    # pending-name.txt lives at ~/.claude/projects/<hash>/session-handoffs/pending-name.txt
+    handoff_dir = Path.home() / ".claude" / "projects" / cwd.replace("/", "-") / "session-handoffs"
+    pending_file = handoff_dir / "pending-name.txt"
+    if pending_file.exists():
+        try:
+            name = pending_file.read_text().strip()
+            # Consume it — single-use
+            pending_file.unlink()
+            if name:
+                return name
+        except Exception:
+            pass
+
+    return next_enumerated_name(cwd, state)
+
+
+def project_session_names(cwd, state=None):
+    """Return list of session_names already used in the given project (cwd-matched)."""
+    state = state if state is not None else _load()
+    names = []
+    for uuid, s in state.items():
+        if s.get("project_cwd") == cwd and s.get("session_name"):
+            names.append(s["session_name"])
+    return names
+
+
+def next_enumerated_name(cwd, state=None):
+    """Compute the next enumerated session name for the project.
+
+    First session in the project gets the bare directory name (e.g. "mine-cc").
+    Subsequent sessions get "<base>-2", "<base>-3", ... using whichever base
+    is most common among prior sessions.
+    """
+    import re
+    project_base = Path(cwd).name or "session"
+    state = state if state is not None else _load()
+    prior_names = project_session_names(cwd, state)
+
+    if not prior_names:
+        return project_base
+
+    # Discover the base used by prior sessions and the highest enumeration seen
+    base_counts = {}
+    max_n = 1
+    for name in prior_names:
+        m = re.match(r"^(.+?)(?:-(\d+))?$", name)
+        if not m:
+            continue
+        base = m.group(1)
+        n = int(m.group(2)) if m.group(2) else 1
+        base_counts[base] = base_counts.get(base, 0) + 1
+        if n > max_n:
+            max_n = n
+
+    if base_counts:
+        # Pick the most common base (ties broken alphabetically for determinism)
+        base = sorted(base_counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+    else:
+        base = project_base
+    return f"{base}-{max_n + 1}"
+
+
+def set_session_name(session_uuid, name):
+    """Update a session's human-readable name."""
+    return update_session(session_uuid, {"session_name": name})
+
+
+def get_session_name(session_uuid):
+    s = get_session(session_uuid)
+    return s.get("session_name")
 
 
 def get_session(session_uuid):

@@ -555,20 +555,27 @@ Step 5: PRE-TOOL HOOKS (runPreToolUseHooks)
           │
           ▼
 Step 6: PERMISSION CHECK (canUseTool)
-  4-branch cascade:
-  ├─ Deny rules (blanket blocks, checked first)
-  ├─ Tool's own checkPermissions()
-  ├─ Allow rules (always-allow from settings/session)
-  └─ Default → based on permission mode:
-       plan:             → deny (need plan approval)
-       default:          → ask user
-       acceptEdits:      → auto-allow file edits
-       auto:             → yolo classifier (separate LLM call)
-       dontAsk:          → auto-allow (deny rules still enforced)
-       bypassPermissions:→ skip most checks
+  Simplified summary — see notes/security-layer.md for the full 11-step inner
+  cascade + 6-step wrapper, all 7 modes, classifier flow, and router seams.
 
-  For Bash: speculative classifier starts in PARALLEL with hooks
-  (races the classifier against the permission dialog for speed)
+  Inner cascade (hasPermissionsToUseToolInner, permissions.ts:1158):
+  1a. Tool-wide DENY rule → deny
+  1b. Tool-wide ASK rule  → ask (sandbox bypass possible for Bash)
+  1c. tool.checkPermissions(input)
+  1d. Tool said deny → deny
+  1e. Tool requires UI + ask → ask (bypass-immune)
+  1f. Content-specific ask rule from tool → ask (bypass-immune)
+  1g. safetyCheck reason (.git/, .claude/, dotfiles) → ask (bypass-immune)
+  2a. mode == bypassPermissions → allow
+  2b. Tool-wide ALLOW rule → allow
+  3.  passthrough → ask
+
+  Wrapper (hasPermissionsToUseTool, permissions.ts:473) then handles:
+  - dontAsk mode: ask → deny coercion (NOT auto-allow as previously noted)
+  - auto mode: acceptEdits fast-path probe → safe-tool allowlist → 2-stage YOLO
+  - Headless agent: PermissionRequest hook chain before fallback deny
+
+  For Bash: classifier is async side-query; first response wins (race for speed)
           │
           ▼
 Step 7: TOOL EXECUTION
